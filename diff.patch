@@ -1,0 +1,202 @@
+diff --git a/../../putty-src/config.c b/putty-src-0.73/config.c
+index e4d6372..1389b2f 100755
+--- a/../../putty-src/config.c
++++ b/putty-src-0.73/config.c
+@@ -2165,6 +2165,10 @@ void setup_config_box(struct controlbox *b, bool midsession,
+             ctrl_editbox(s, "Auto-login username", 'u', 50,
+                          HELPCTX(connection_username),
+                          conf_editbox_handler, I(CONF_username), I(1));
++            c = ctrl_editbox(s, "Auto-login password", 'w', 50,
++                         HELPCTX(connection_autologin_passwd),
++                         conf_editbox_handler, I(CONF_autologin_passwd), I(1));
++            c->editbox.password = true;
+             {
+                 /* We assume the local username is sufficiently stable
+                  * to include on the dialog box. */
+diff --git a/../../putty-src/putty.h b/putty-src-0.73/putty.h
+index 0b171e8..489537b 100755
+--- a/../../putty-src/putty.h
++++ b/putty-src-0.73/putty.h
+@@ -1242,6 +1242,7 @@ NORETURN void cleanup_exit(int);
+     /* X(value-type, subkey-type, keyword) */ \
+     X(STR, NONE, host) \
+     X(INT, NONE, port) \
++    X(STR, NONE, autologin_passwd) \
+     X(INT, NONE, protocol) /* PROT_SSH, PROT_TELNET etc */ \
+     X(INT, NONE, addressfamily) /* ADDRTYPE_IPV[46] or ADDRTYPE_UNSPEC */ \
+     X(INT, NONE, close_on_exit) /* FORCE_ON, FORCE_OFF, AUTO */ \
+@@ -1579,6 +1580,7 @@ void random_destroy_seed(void);
+ const struct BackendVtable *backend_vt_from_name(const char *name);
+ const struct BackendVtable *backend_vt_from_proto(int proto);
+ char *get_remote_username(Conf *conf); /* dynamically allocated */
++char *get_autologin_passwd(Conf *conf);
+ char *save_settings(const char *section, Conf *conf);
+ void save_open_settings(settings_w *sesskey, Conf *conf);
+ bool load_settings(const char *section, Conf *conf);
+diff --git a/../../putty-src/settings.c b/putty-src-0.73/settings.c
+index 44758bb..89e5298 100755
+--- a/../../putty-src/settings.c
++++ b/putty-src-0.73/settings.c
+@@ -104,6 +104,15 @@ char *get_remote_username(Conf *conf)
+         return NULL;
+     }
+ }
++char *get_autologin_passwd(Conf *conf)
++{
++    char *passwd = conf_get_str(conf, CONF_autologin_passwd);
++    if (*passwd) {
++        return dupstr(passwd);
++    } else {
++        return NULL;
++    }
++}
+ 
+ static char *gpps_raw(settings_r *sesskey, const char *name, const char *def)
+ {
+@@ -586,6 +595,7 @@ void save_open_settings(settings_w *sesskey, Conf *conf)
+     write_setting_i(sesskey, "ProxyLogToTerm", conf_get_int(conf, CONF_proxy_log_to_term));
+     wmap(sesskey, "Environment", conf, CONF_environmt, true);
+     write_setting_s(sesskey, "UserName", conf_get_str(conf, CONF_username));
++    write_setting_s(sesskey, "PassWord", conf_get_str(conf, CONF_autologin_passwd));
+     write_setting_b(sesskey, "UserNameFromEnvironment", conf_get_bool(conf, CONF_username_from_env));
+     write_setting_s(sesskey, "LocalUserName", conf_get_str(conf, CONF_localusername));
+     write_setting_b(sesskey, "NoPTY", conf_get_bool(conf, CONF_nopty));
+@@ -933,6 +943,7 @@ void load_open_settings(settings_r *sesskey, Conf *conf)
+     gppi(sesskey, "ProxyLogToTerm", FORCE_OFF, conf, CONF_proxy_log_to_term);
+     gppmap(sesskey, "Environment", conf, CONF_environmt);
+     gpps(sesskey, "UserName", "", conf, CONF_username);
++    gpps(sesskey, "PassWord", "", conf, CONF_autologin_passwd);
+     gppb(sesskey, "UserNameFromEnvironment", false,
+          conf, CONF_username_from_env);
+     gpps(sesskey, "LocalUserName", "", conf, CONF_localusername);
+@@ -1101,7 +1112,7 @@ void load_open_settings(settings_r *sesskey, Conf *conf)
+                  / 1000
+ #endif
+                  );
+-    gppi(sesskey, "ScrollbackLines", 2000, conf, CONF_savelines);
++    gppi(sesskey, "ScrollbackLines", 90000, conf, CONF_savelines);
+     gppb(sesskey, "DECOriginMode", false, conf, CONF_dec_om);
+     gppb(sesskey, "AutoWrapMode", true, conf, CONF_wrap_mode);
+     gppb(sesskey, "LFImpliesCR", false, conf, CONF_lfhascr);
+diff --git a/../../putty-src/ssh.c b/putty-src-0.73/ssh.c
+index 4268e96..01cc5b5 100755
+--- a/../../putty-src/ssh.c
++++ b/putty-src-0.73/ssh.c
+@@ -249,12 +249,13 @@ static void ssh_got_ssh_version(struct ssh_version_receiver *rcv,
+                 transport_child_layer = connection_layer;
+             } else {
+                 char *username = get_remote_username(ssh->conf);
++                char *autologin_passwd = get_autologin_passwd(ssh->conf);
+ 
+                 userauth_layer = ssh2_userauth_new(
+                     connection_layer, ssh->savedhost, ssh->fullhostname,
+                     conf_get_filename(ssh->conf, CONF_keyfile),
+                     conf_get_bool(ssh->conf, CONF_ssh_show_banner),
+-                    conf_get_bool(ssh->conf, CONF_tryagent), username,
++                    conf_get_bool(ssh->conf, CONF_tryagent), username, autologin_passwd,
+                     conf_get_bool(ssh->conf, CONF_change_username),
+                     conf_get_bool(ssh->conf, CONF_try_ki_auth),
+ #ifndef NO_GSSAPI
+@@ -273,6 +274,7 @@ static void ssh_got_ssh_version(struct ssh_version_receiver *rcv,
+                 transport_child_layer = userauth_layer;
+ 
+                 sfree(username);
++                sfree(autologin_passwd);
+             }
+ 
+             ssh->base_layer = ssh2_transport_new(
+diff --git a/../../putty-src/ssh2userauth.c b/putty-src-0.73/ssh2userauth.c
+index 756a451..31c7b69 100755
+--- a/../../putty-src/ssh2userauth.c
++++ b/putty-src-0.73/ssh2userauth.c
+@@ -127,7 +127,7 @@ PacketProtocolLayer *ssh2_userauth_new(
+     PacketProtocolLayer *successor_layer,
+     const char *hostname, const char *fullhostname,
+     Filename *keyfile, bool show_banner, bool tryagent,
+-    const char *default_username, bool change_username,
++    const char *default_username, const char *autologin_passwd, bool change_username,
+     bool try_ki_auth, bool try_gssapi_auth, bool try_gssapi_kex_auth,
+     bool gssapi_fwd, struct ssh_connection_shared_gss_state *shgss)
+ {
+@@ -142,6 +142,7 @@ PacketProtocolLayer *ssh2_userauth_new(
+     s->show_banner = show_banner;
+     s->tryagent = tryagent;
+     s->default_username = dupstr(default_username);
++    s->password = dupstr(autologin_passwd);
+     s->change_username = change_username;
+     s->try_ki_auth = try_ki_auth;
+     s->try_gssapi_auth = try_gssapi_auth;
+@@ -1414,8 +1415,10 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
+                 /*
+                  * Plain old password authentication.
+                  */
++
+                 bool changereq_first_time; /* not live over crReturn */
+ 
++            if (s->password == NULL) { /* add by kitiz */
+                 s->ppl.bpp->pls->actx = SSH2_PKTCTX_PASSWORD;
+ 
+                 s->cur_prompt = new_prompts();
+@@ -1460,6 +1463,8 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
+                 s->password = dupstr(s->cur_prompt->prompts[0]->result);
+                 free_prompts(s->cur_prompt);
+ 
++           }/* kitiz end */
++
+                 /*
+                  * Send the password packet.
+                  *
+@@ -1568,6 +1573,7 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
+                             free_prompts(s->cur_prompt);
+                             smemclr(s->password, strlen(s->password));
+                             sfree(s->password);
++                            s->password = NULL;
+                             ssh_bpp_queue_disconnect(
+                                 s->ppl.bpp, "Unable to authenticate",
+                                 SSH2_DISCONNECT_AUTH_CANCELLED_BY_USER);
+@@ -1652,6 +1658,7 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
+                  */
+                 smemclr(s->password, strlen(s->password));
+                 sfree(s->password);
++                s->password = NULL;
+ 
+             } else {
+                 ssh_bpp_queue_disconnect(
+diff --git a/../../putty-src/sshppl.h b/putty-src-0.73/sshppl.h
+index 994b0f6..103cb17 100755
+--- a/../../putty-src/sshppl.h
++++ b/putty-src-0.73/sshppl.h
+@@ -108,7 +108,7 @@ PacketProtocolLayer *ssh2_userauth_new(
+     PacketProtocolLayer *successor_layer,
+     const char *hostname, const char *fullhostname,
+     Filename *keyfile, bool show_banner, bool tryagent,
+-    const char *default_username, bool change_username,
++    const char *default_username, const char *autologin_passwd, bool change_username,
+     bool try_ki_auth,
+     bool try_gssapi_auth, bool try_gssapi_kex_auth,
+     bool gssapi_fwd, struct ssh_connection_shared_gss_state *shgss);
+diff --git a/../../putty-src/windows/windefs.c b/putty-src-0.73/windows/windefs.c
+index 75a2df7..862d7db 100755
+--- a/../../putty-src/windows/windefs.c
++++ b/putty-src-0.73/windows/windefs.c
+@@ -9,7 +9,7 @@
+ FontSpec *platform_default_fontspec(const char *name)
+ {
+     if (!strcmp(name, "Font"))
+-        return fontspec_new("Courier New", false, 10, ANSI_CHARSET);
++        return fontspec_new("Courier New", false, 12, ANSI_CHARSET);
+     else
+         return fontspec_new("", false, 0, 0);
+ }
+diff --git a/../../putty-src/windows/winhelp.h b/putty-src-0.73/windows/winhelp.h
+index a257455..3cfe7d2 100755
+--- a/../../putty-src/windows/winhelp.h
++++ b/putty-src-0.73/windows/winhelp.h
+@@ -73,6 +73,7 @@
+ #define WINHELP_CTX_connection_termtype "config-termtype"
+ #define WINHELP_CTX_connection_termspeed "config-termspeed"
+ #define WINHELP_CTX_connection_username "config-username"
++#define WINHELP_CTX_connection_autologin_passwd "config-autologin-passwd"
+ #define WINHELP_CTX_connection_username_from_env "config-username-from-env"
+ #define WINHELP_CTX_connection_keepalive "config-keepalive"
+ #define WINHELP_CTX_connection_nodelay "config-nodelay"
